@@ -175,7 +175,7 @@ with tab2:
         st.subheader("🔄 อัปเดตผลการซ่อมแซมหน้างาน (Update Case Progress)")
         
         selected_case = st.selectbox("เลือก Case ID ที่ต้องการอัปเดต:", df["case_id"].tolist())
-        case_info = df[df["case_id"] == selected_case].iloc
+        case\_info = df[df["case\_id"] == selected\_case].iloc[0]
         
         st.write(f"**สถานี:** {case_info['station_name']} | **อุปกรณ์:** {case_info['equipment_type']} | **กำหนดเสร็จ:** {case_info['sla_deadline']}")
         
