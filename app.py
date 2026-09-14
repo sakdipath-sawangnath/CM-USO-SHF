@@ -74,7 +74,8 @@ def generate_case_id():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM cm_cases WHERE case_id LIKE ?", (f"CM-{now_str}-%",))
-    count = c.fetchone() + 1
+    row = c.fetchone() 
+    count = (row[0] if row else 0) + 1
     conn.close()
     return f"CM-{now_str}-{count:03d}"
 
