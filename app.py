@@ -1,1 +1,263 @@
-import streamlit as st import pandas as pd import sqlite3 from datetime import datetime, timedelta # ========================================== # 1\. การตั้งค่าระบบและฐานข้อมูล (Database Setup) # ========================================== DB\_FILE = "cm\_management.db" def init\_db(): conn = sqlite3.connect(DB\_FILE) c = conn.cursor() c.execute(''' CREATE TABLE IF NOT EXISTS cm\_cases ( case\_id TEXT PRIMARY KEY, station\_name TEXT, province TEXT, reporter\_name TEXT, reporter\_phone TEXT, issue\_desc TEXT, equipment\_type TEXT, sla\_category TEXT, report\_time TEXT, sla\_deadline TEXT, status TEXT, technician\_name TEXT, solution\_desc TEXT, original\_sn TEXT, new\_sn TEXT, is\_spare\_used INTEGER, spare\_sn TEXT, spare\_install\_date TEXT, spare\_return\_deadline TEXT, completion\_time TEXT ) ''') conn.commit() conn.close() init\_db() # ========================================== # 2\. ฟังก์ชันคำนวณ SLA ตามเงื่อนไข TOR # ========================================== def get\_sla\_info(equipment): sla\_3h = [ "ระบบศูนย์ควบคุมสถานีแม่ข่าย (BSSC)", "ชุดสั่งการ (Dispatcher Console)", "ระบบบริหารจัดการ SD-WAN Controller" ] sla\_3d = [ "ชุดอุปกรณ์ทวนสัญญาณผ่านคลื่นความถี่สูง (SHF)", "ชุดอุปกรณ์ Gateway เชื่อมต่อ Analog", "สถานีแม่ข่ายแบบ 1 Carrier (Outdoor)", "อุปกรณ์กระจายสัญญาณ L3 Switch (24 Ports)", "เครื่องสำรองไฟฟ้า ขนาด 3 kVA" ] sla\_4d = [ "เครื่องวิทยุลูกข่ายชนิดมือถือ", "เครื่องวิทยุลูกข่ายชนิดประจำที่ ณ ที่ทำการหมู่บ้าน" ] if equipment in sla\_3h: return 3, "3 ชั่วโมง (ด่วนที่สุด)" elif equipment in sla\_3d: return 72, "3 วัน" elif equipment in sla\_4d: return 96, "4 วัน" return 72, "3 วัน" def generate\_case\_id(): now\_str = datetime.now().strftime("%Y%m%d") conn = sqlite3.connect(DB\_FILE) c = conn.cursor() c.execute("SELECT COUNT(\*) FROM cm\_cases WHERE case\_id LIKE ?", (f"CM-{now\_str}-%",)) count = c.fetchone()[0] + 1 conn.close() return f"CM-{now\_str}-{count:03d}" # ========================================== # 3\. ส่วนแสดงผล UI (Streamlit Layout) # ========================================== st.set\_page\_config(page\_title="ระบบ Helpdesk &amp; CM Tracking - USO SHF", page\_icon="🛠️", layout="wide") st.title("🛠️ ระบบบริหารจัดการและติดตามงานซ่อมแซมแก้ไข (CM Management)") st.caption("โครงการเพิ่มประสิทธิภาพระบบโครงข่ายสื่อสารด้วยอุปกรณ์ทวนสัญญาณผ่านคลื่นความถี่สูง (SHF) - สำนักงาน กสทช.") st.markdown("---") # สร้าง แท็บ เมนูการใช้งาน tab1, tab2, tab3, tab4 = st.tabs([ "📝 1\. บันทึกรับแจ้งเหตุซ่อมใหม่", "📊 2\. ติดตามสถานะ &amp; SLA", "📦 3\. ติดตามอุปกรณ์สำรอง (60 วัน)", "📈 4\. สรุปภาพรวม &amp; ออกรายงาน" ]) # ------------------------------------------ # TAB 1: รับแจ้งเหตุซ่อมใหม่ (Helpdesk Intake) # ------------------------------------------ with tab1: st.subheader("รับแจ้งข้อขัดข้องและออกเลข Case ID") with st.form("intake\_form", clear\_on\_submit=True): col1, col2 = st.columns(2) with col1: station\_name = st.text\_input("ชื่อสถานี/จุดติดตั้ง \*", placeholder="เช่น สถานีบ้านห้วยผา") province = st.selectbox("จังหวัด \*", ["กาญจนบุรี", "ตาก", "แม่ฮ่องสอน", "เชียงใหม่", "อื่น ๆ"]) reporter\_name = st.text\_input("ชื่อผู้แจ้งเหตุ \*") reporter\_phone = st.text\_input("เบอร์โทรศัพท์ผู้แจ้ง (02 / มือถือ) \*") with col2: equipment\_type = st.selectbox("อุปกรณ์ที่เกิดข้อขัดข้อง \*", [ "ชุดอุปกรณ์ทวนสัญญาณผ่านคลื่นความถี่สูง (SHF)", "ระบบศูนย์ควบคุมสถานีแม่ข่าย (BSSC)", "ชุดสั่งการ (Dispatcher Console)", "ระบบบริหารจัดการ SD-WAN Controller", "ชุดอุปกรณ์ Gateway เชื่อมต่อ Analog", "สถานีแม่ข่ายแบบ 1 Carrier (Outdoor)", "อุปกรณ์กระจายสัญญาณ L3 Switch (24 Ports)", "เครื่องสำรองไฟฟ้า ขนาด 3 kVA", "เครื่องวิทยุลูกข่ายชนิดมือถือ", "เครื่องวิทยุลูกข่ายชนิดประจำที่ ณ ที่ทำการหมู่บ้าน" ]) report\_datetime = st.datetime\_input("วัน-เวลาที่รับแจ้งเหตุ (Start SLA) \*", datetime.now()) issue\_desc = st.text\_area("รายละเอียดอาการเสีย/ข้อขัดข้อง \*") submitted = st.form\_submit\_button("บันทึกการรับแจ้งเหตุ (Create Case)") if submitted: if not station\_name or not reporter\_name or not issue\_desc: st.error("⚠️ กรุณากรอกข้อมูลที่มีเครื่องหมาย \* ให้ครบถ้วน") else: case\_id = generate\_case\_id() hours, sla\_label = get\_sla\_info(equipment\_type) sla\_deadline = report\_datetime + timedelta(hours=hours) conn = sqlite3.connect(DB\_FILE) c = conn.cursor() c.execute(''' INSERT INTO cm\_cases (case\_id, station\_name, province, reporter\_name, reporter\_phone, issue\_desc, equipment\_type, sla\_category, report\_time, sla\_deadline, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ''', (case\_id, station\_name, province, reporter\_name, reporter\_phone, issue\_desc, equipment\_type, sla\_label, report\_datetime.strftime("%Y-%m-%d %H:%M:%S"), sla\_deadline.strftime("%Y-%m-%d %H:%M:%S"), "กำลังดำเนินการ")) conn.commit() conn.close() st.success(f"✅ บันทึกรับแจ้งเหตุเรียบร้อยแล้ว!") st.info(f"📌 \*\*Case ID:\*\* \`{case\_id}\` | \*\*ประเภท SLA:\*\* {sla\_label} | \*\*ต้องแก้ไขเสร็จภายใน:\*\* \`{sla\_deadline.strftime('%d/%m/%Y %H:%M')}\`") # ------------------------------------------ # TAB 2: ติดตามสถานะ &amp; SLA (Tracking) # ------------------------------------------ with tab2: st.subheader("ตารางติดตามสถานะงานซ่อม และการอัปเดตผลงาน") conn = sqlite3.connect(DB\_FILE) df = pd.read\_sql\_query("SELECT \* FROM cm\_cases ORDER BY report\_time DESC", conn) conn.close() if df.empty: st.info("ยังไม่มีข้อมูลการแจ้งซ่อมในระบบ") else: # แสดงตารางรวม st.dataframe(df[[ "case\_id", "station\_name", "equipment\_type", "sla\_category", "report\_time", "sla\_deadline", "status" ]], use\_container\_width=True) st.markdown("---") st.subheader("🔄 อัปเดตผลการซ่อมแซมหน้างาน (Update Case Progress)") selected\_case = st.selectbox("เลือก Case ID ที่ต้องการอัปเดต:", df["case\_id"].tolist()) case\_info = df[df["case\_id"] == selected\_case].iloc[0] st.write(f"\*\*สถานี:\*\* {case\_info['station\_name']} | \*\*อุปกรณ์:\*\* {case\_info['equipment\_type']} | \*\*กำหนดเสร็จ:\*\* {case\_info['sla\_deadline']}") with st.form("update\_case\_form"): col\_a, col\_b = st.columns(2) with col\_a: status = st.selectbox("สถานะการซ่อม", ["กำลังดำเนินการ", "แก้ไขเรียบร้อยแล้ว", "รออะไหล่/นำอุปกรณ์สำรองมาเปลี่ยน"], index=0 if case\_info['status']=="กำลังดำเนินการ" else 1) technician\_name = st.text\_input("ชื่อวิศวกรผู้เข้าซ่อม", value=case\_info['technician\_name'] if case\_info['technician\_name'] else "") original\_sn = st.text\_input("Serial Number อุปกรณ์เดิม", value=case\_info['original\_sn'] if case\_info['original\_sn'] else "") new\_sn = st.text\_input("Serial Number อุปกรณ์ใหม่ (ถ้ามี)", value=case\_info['new\_sn'] if case\_info['new\_sn'] else "") with col\_b: is\_spare = st.checkbox("มีการใช้อุปกรณ์สำรองชั่วคราวหรือไม่?", value=bool(case\_info['is\_spare\_used'])) spare\_sn = st.text\_input("S/N อุปกรณ์สำรองชั่วคราว", value=case\_info['spare\_sn'] if case\_info['spare\_sn'] else "") solution\_desc = st.text\_area("วิธีแก้ไข / สาเหตุของปัญหา", value=case\_info['solution\_desc'] if case\_info['solution\_desc'] else "") btn\_update = st.form\_submit\_button("บันทึกการอัปเดต") if btn\_update: conn = sqlite3.connect(DB\_FILE) c = conn.cursor() now\_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S") spare\_install\_date = datetime.now().strftime("%Y-%m-%d") if is\_spare else None spare\_return\_deadline = (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d") if is\_spare else None completion\_time = now\_str if status == "แก้ไขเรียบร้อยแล้ว" else None c.execute(''' UPDATE cm\_cases SET status=?, technician\_name=?, solution\_desc=?, original\_sn=?, new\_sn=?, is\_spare\_used=?, spare\_sn=?, spare\_install\_date=?, spare\_return\_deadline=?, completion\_time=? WHERE case\_id=? ''', (status, technician\_name, solution\_desc, original\_sn, new\_sn, 1 if is\_spare else 0, spare\_sn, spare\_install\_date, spare\_return\_deadline, completion\_time, selected\_case)) conn.commit() conn.close() st.success(f"อัปเดตข้อมูล Case ID: {selected\_case} เรียบร้อยแล้ว!") st.rerun() # ------------------------------------------ # TAB 3: ติดตามอุปกรณ์สำรอง 60 วัน (Spare Unit Tracking) # ------------------------------------------ with tab3: st.subheader("รายการอุปกรณ์สำรองชั่วคราว (ต้องนำอุปกรณ์จริงส่งคืนภายใน 60 วัน)") conn = sqlite3.connect(DB\_FILE) spare\_df = pd.read\_sql\_query("SELECT case\_id, station\_name, equipment\_type, spare\_sn, spare\_install\_date, spare\_return\_deadline FROM cm\_cases WHERE is\_spare\_used = 1", conn) conn.close() if spare\_df.empty: st.info("ไม่มีรายการที่ใช้อุปกรณ์สำรองชั่วคราว") else: st.dataframe(spare\_df, use\_container\_width=True) # ------------------------------------------ # TAB 4: สรุปภาพรวม &amp; ส่งออกรายงาน (Analytics &amp; Report) # ------------------------------------------ with tab4: st.subheader("สรุปสถิติผลการดำเนินงาน CM") conn = sqlite3.connect(DB\_FILE) df\_all = pd.read\_sql\_query("SELECT \* FROM cm\_cases", conn) conn.close() if not df\_all.empty: col\_m1, col\_m2, col\_m3 = st.columns(3) col\_m1.metric("เคสทั้งหมด", len(df\_all)) col\_m2.metric("กำลังดำเนินการ", len(df\_all[df\_all["status"] == "กำลังดำเนินการ"])) col\_m3.metric("แก้ไขเรียบร้อยแล้ว", len(df\_all[df\_all["status"] == "แก้ไขเรียบร้อยแล้ว"])) st.markdown("---") st.subheader("ส่งออกข้อมูลเป็น CSV เพื่อส่ง กสทช. (ภายใน 7 วันทำการ)") csv = df\_all.to\_csv(index=False).encode('utf-8-sig') st.download\_button( label="📥 ดาวน์โหลดรายงาน CM ทั้งหมด (.csv)", data=csv, file\_name=f"CM\_Report\_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv" )
+### 📋 โค้ดฉบับแก้ไขสมบูรณ์สำหรับ `app.py`
+
+```python
+import streamlit as st
+import pandas as pd
+import sqlite3
+from datetime import datetime, timedelta
+
+# ==========================================
+# 1. การตั้งค่าระบบและฐานข้อมูล (Database Setup)
+# ==========================================
+DB_FILE = "cm_management.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS cm_cases (
+            case_id TEXT PRIMARY KEY,
+            station_name TEXT,
+            province TEXT,
+            reporter_name TEXT,
+            reporter_phone TEXT,
+            issue_desc TEXT,
+            equipment_type TEXT,
+            sla_category TEXT,
+            report_time TEXT,
+            sla_deadline TEXT,
+            status TEXT,
+            technician_name TEXT,
+            solution_desc TEXT,
+            original_sn TEXT,
+            new_sn TEXT,
+            is_spare_used INTEGER,
+            spare_sn TEXT,
+            spare_install_date TEXT,
+            spare_return_deadline TEXT,
+            completion_time TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# ==========================================
+# 2. ฟังก์ชันคำนวณ SLA ตามเงื่อนไข TOR
+# ==========================================
+def get_sla_info(equipment):
+    sla_3h = [
+        "ระบบศูนย์ควบคุมสถานีแม่ข่าย (BSSC)",
+        "ชุดสั่งการ (Dispatcher Console)",
+        "ระบบบริหารจัดการ SD-WAN Controller"
+    ]
+    sla_3d = [
+        "ชุดอุปกรณ์ทวนสัญญาณผ่านคลื่นความถี่สูง (SHF)",
+        "ชุดอุปกรณ์ Gateway เชื่อมต่อ Analog",
+        "สถานีแม่ข่ายแบบ 1 Carrier (Outdoor)",
+        "อุปกรณ์กระจายสัญญาณ L3 Switch (24 Ports)",
+        "เครื่องสำรองไฟฟ้า ขนาด 3 kVA"
+    ]
+    sla_4d = [
+        "เครื่องวิทยุลูกข่ายชนิดมือถือ",
+        "เครื่องวิทยุลูกข่ายชนิดประจำที่ ณ ที่ทำการหมู่บ้าน"
+    ]
+    
+    if equipment in sla_3h:
+        return 3, "3 ชั่วโมง (ด่วนที่สุด)"
+    elif equipment in sla_3d:
+        return 72, "3 วัน"
+    elif equipment in sla_4d:
+        return 96, "4 วัน"
+    return 72, "3 วัน"
+
+def generate_case_id():
+    now_str = datetime.now().strftime("%Y%m%d")
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM cm_cases WHERE case_id LIKE ?", (f"CM-{now_str}-%",))
+    count = c.fetchone() + 1
+    conn.close()
+    return f"CM-{now_str}-{count:03d}"
+
+# ==========================================
+# 3. ส่วนแสดงผล UI (Streamlit Layout)
+# ==========================================
+st.set_page_config(page_title="ระบบ Helpdesk & CM Tracking - USO SHF", page_icon="🛠️", layout="wide")
+
+st.title("🛠️ ระบบบริหารจัดการและติดตามงานซ่อมแซมแก้ไข (CM Management)")
+st.caption("โครงการเพิ่มประสิทธิภาพระบบโครงข่ายสื่อสารด้วยอุปกรณ์ทวนสัญญาณผ่านคลื่นความถี่สูง (SHF) - สำนักงาน กสทช.")
+
+st.markdown("---")
+
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📝 1. บันทึกรับแจ้งเหตุซ่อมใหม่", 
+    "📊 2. ติดตามสถานะ & SLA", 
+    "📦 3. ติดตามอุปกรณ์สำรอง (60 วัน)", 
+    "📈 4. สรุปภาพรวม & ออกรายงาน"
+])
+
+# ------------------------------------------
+# TAB 1: รับแจ้งเหตุซ่อมใหม่ (Helpdesk Intake)
+# ------------------------------------------
+with tab1:
+    st.subheader("รับแจ้งข้อขัดข้องและออกเลข Case ID")
+    
+    with st.form("intake_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            station_name = st.text_input("ชื่อสถานี/จุดติดตั้ง *", placeholder="เช่น สถานีบ้านห้วยผา")
+            province = st.selectbox("จังหวัด *", ["กาญจนบุรี", "ตาก", "แม่ฮ่องสอน", "เชียงใหม่", "อื่น ๆ"])
+            reporter_name = st.text_input("ชื่อผู้แจ้งเหตุ *")
+            reporter_phone = st.text_input("เบอร์โทรศัพท์ผู้แจ้ง (02 / มือถือ) *")
+        
+        with col2:
+            equipment_type = st.selectbox("อุปกรณ์ที่เกิดข้อขัดข้อง *", [
+                "ชุดอุปกรณ์ทวนสัญญาณผ่านคลื่นความถี่สูง (SHF)",
+                "ระบบศูนย์ควบคุมสถานีแม่ข่าย (BSSC)",
+                "ชุดสั่งการ (Dispatcher Console)",
+                "ระบบบริหารจัดการ SD-WAN Controller",
+                "ชุดอุปกรณ์ Gateway เชื่อมต่อ Analog",
+                "สถานีแม่ข่ายแบบ 1 Carrier (Outdoor)",
+                "อุปกรณ์กระจายสัญญาณ L3 Switch (24 Ports)",
+                "เครื่องสำรองไฟฟ้า ขนาด 3 kVA",
+                "เครื่องวิทยุลูกข่ายชนิดมือถือ",
+                "เครื่องวิทยุลูกข่ายชนิดประจำที่ ณ ที่ทำการหมู่บ้าน"
+            ])
+            report_datetime = st.datetime_input("วัน-เวลาที่รับแจ้งเหตุ (Start SLA) *", datetime.now())
+            issue_desc = st.text_area("รายละเอียดอาการเสีย/ข้อขัดข้อง *")
+        
+        submitted = st.form_submit_button("บันทึกการรับแจ้งเหตุ (Create Case)")
+        
+        if submitted:
+            if not station_name or not reporter_name or not issue_desc:
+                st.error("⚠️ กรุณากรอกข้อมูลที่มีเครื่องหมาย * ให้ครบถ้วน")
+            else:
+                case_id = generate_case_id()
+                hours, sla_label = get_sla_info(equipment_type)
+                sla_deadline = report_datetime + timedelta(hours=hours)
+                
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute('''
+                    INSERT INTO cm_cases (case_id, station_name, province, reporter_name, reporter_phone, 
+                                        issue_desc, equipment_type, sla_category, report_time, sla_deadline, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (case_id, station_name, province, reporter_name, reporter_phone, 
+                      issue_desc, equipment_type, sla_label, 
+                      report_datetime.strftime("%Y-%m-%d %H:%M:%S"), 
+                      sla_deadline.strftime("%Y-%m-%d %H:%M:%S"), "กำลังดำเนินการ"))
+                conn.commit()
+                conn.close()
+                
+                st.success(f"✅ บันทึกรับแจ้งเหตุเรียบร้อยแล้ว!")
+                st.info(f"📌 **Case ID:** `{case_id}` | **ประเภท SLA:** {sla_label} | **ต้องแก้ไขเสร็จภายใน:** `{sla_deadline.strftime('%d/%m/%Y %H:%M')}`")
+
+# ------------------------------------------
+# TAB 2: ติดตามสถานะ & SLA (Tracking)
+# ------------------------------------------
+with tab2:
+    st.subheader("ตารางติดตามสถานะงานซ่อม และการอัปเดตผลงาน")
+    
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT * FROM cm_cases ORDER BY report_time DESC", conn)
+    conn.close()
+    
+    if df.empty:
+        st.info("ยังไม่มีข้อมูลการแจ้งซ่อมในระบบ")
+    else:
+        st.dataframe(df[[
+            "case_id", "station_name", "equipment_type", "sla_category", 
+            "report_time", "sla_deadline", "status"
+        ]], use_container_width=True)
+        
+        st.markdown("---")
+        st.subheader("🔄 อัปเดตผลการซ่อมแซมหน้างาน (Update Case Progress)")
+        
+        selected_case = st.selectbox("เลือก Case ID ที่ต้องการอัปเดต:", df["case_id"].tolist())
+        case_info = df[df["case_id"] == selected_case].iloc
+        
+        st.write(f"**สถานี:** {case_info['station_name']} | **อุปกรณ์:** {case_info['equipment_type']} | **กำหนดเสร็จ:** {case_info['sla_deadline']}")
+        
+        with st.form("update_case_form"):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                status = st.selectbox("สถานะการซ่อม", ["กำลังดำเนินการ", "แก้ไขเรียบร้อยแล้ว", "รออะไหล่/นำอุปกรณ์สำรองมาเปลี่ยน"], index=0 if case_info['status']=="กำลังดำเนินการ" else 1)
+                technician_name = st.text_input("ชื่อวิศวกรผู้เข้าซ่อม", value=case_info['technician_name'] if case_info['technician_name'] else "")
+                original_sn = st.text_input("Serial Number อุปกรณ์เดิม", value=case_info['original_sn'] if case_info['original_sn'] else "")
+                new_sn = st.text_input("Serial Number อุปกรณ์ใหม่ (ถ้ามี)", value=case_info['new_sn'] if case_info['new_sn'] else "")
+            
+            with col_b:
+                is_spare = st.checkbox("มีการใช้อุปกรณ์สำรองชั่วคราวหรือไม่?", value=bool(case_info['is_spare_used']))
+                spare_sn = st.text_input("S/N อุปกรณ์สำรองชั่วคราว", value=case_info['spare_sn'] if case_info['spare_sn'] else "")
+                solution_desc = st.text_area("วิธีแก้ไข / สาเหตุของปัญหา", value=case_info['solution_desc'] if case_info['solution_desc'] else "")
+                
+            btn_update = st.form_submit_button("บันทึกการอัปเดต")
+            
+            if btn_update:
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                spare_install_date = datetime.now().strftime("%Y-%m-%d") if is_spare else None
+                spare_return_deadline = (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d") if is_spare else None
+                completion_time = now_str if status == "แก้ไขเรียบร้อยแล้ว" else None
+                
+                c.execute('''
+                    UPDATE cm_cases 
+                    SET status=?, technician_name=?, solution_desc=?, original_sn=?, new_sn=?, 
+                        is_spare_used=?, spare_sn=?, spare_install_date=?, spare_return_deadline=?, completion_time=?
+                    WHERE case_id=?
+                ''', (status, technician_name, solution_desc, original_sn, new_sn, 
+                      1 if is_spare else 0, spare_sn, spare_install_date, spare_return_deadline, completion_time, selected_case))
+                
+                conn.commit()
+                conn.close()
+                st.success(f"อัปเดตข้อมูล Case ID: {selected_case} เรียบร้อยแล้ว!")
+                st.rerun()
+
+# ------------------------------------------
+# TAB 3: ติดตามอุปกรณ์สำรอง 60 วัน (Spare Unit Tracking)
+# ------------------------------------------
+with tab3:
+    st.subheader("รายการอุปกรณ์สำรองชั่วคราว (ต้องนำอุปกรณ์จริงส่งคืนภายใน 60 วัน)")
+    
+    conn = sqlite3.connect(DB_FILE)
+    spare_df = pd.read_sql_query("SELECT case_id, station_name, equipment_type, spare_sn, spare_install_date, spare_return_deadline FROM cm_cases WHERE is_spare_used = 1", conn)
+    conn.close()
+    
+    if spare_df.empty:
+        st.info("ไม่มีรายการที่ใช้อุปกรณ์สำรองชั่วคราว")
+    else:
+        st.dataframe(spare_df, use_container_width=True)
+
+# ------------------------------------------
+# TAB 4: สรุปภาพรวม & ส่งออกรายงาน (Analytics & Report)
+# ------------------------------------------
+with tab4:
+    st.subheader("สรุปสถิติผลการดำเนินงาน CM")
+    
+    conn = sqlite3.connect(DB_FILE)
+    df_all = pd.read_sql_query("SELECT * FROM cm_cases", conn)
+    conn.close()
+    
+    if not df_all.empty:
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("เคสทั้งหมด", len(df_all))
+        col_m2.metric("กำลังดำเนินการ", len(df_all[df_all["status"] == "กำลังดำเนินการ"]))
+        col_m3.metric("แก้ไขเรียบร้อยแล้ว", len(df_all[df_all["status"] == "แก้ไขเรียบร้อยแล้ว"]))
+        
+        st.markdown("---")
+        st.subheader("ส่งออกข้อมูลเป็น CSV เพื่อส่ง กสทช.")
+        csv = df_all.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 ดาวน์โหลดรายงาน CM ทั้งหมด (.csv)",
+            data=csv,
+            file_name=f"CM_Report_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+```
+
+เมื่อคุณกด **Commit changes** บน GitHub แล้ว ให้กลับไปดูหน้า Render สังเกตว่าระบบจะทำการรัน Build ใหม่อีกครั้ง และเมื่อขึ้นสถานะ **`Live` (สีเขียว)** เว็บไซต์ก็จะสามารถเปิดใช้งานได้ตามปกติทันทีครับ!
