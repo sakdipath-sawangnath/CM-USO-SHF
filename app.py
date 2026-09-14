@@ -1,6 +1,5 @@
 import sqlite3
 from datetime import datetime, timedelta
-2
 import pandas as pd
 import streamlit as st
 
@@ -83,7 +82,6 @@ def get_sla_info(equipment):
     return 96, "4 วัน"
   return 72, "3 วัน"
 
-
 def generate_case_id():
   now_str = datetime.now().strftime("%Y%m%d")
   conn = sqlite3.connect(DB_FILE)
@@ -92,7 +90,7 @@ def generate_case_id():
       "SELECT COUNT(*) FROM cm_cases WHERE case_id LIKE ?", (f"CM-{now_str}-%",)
   )
   row = c.fetchone()
-  count = (row if row and row is not None else 0) + 1
+  count = (row if row else 0) + 1
   conn.close()
   return f"CM-{now_str}-{count:03d}"
 
