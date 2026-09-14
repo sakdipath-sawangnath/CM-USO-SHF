@@ -1,6 +1,3 @@
-### 📋 โค้ดฉบับแก้ไขสมบูรณ์สำหรับ `app.py`
-
-python
 import streamlit as st
 import pandas as pd
 import sqlite3
