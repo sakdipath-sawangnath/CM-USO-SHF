@@ -117,7 +117,7 @@ def get_sla_info(equipment):
 
 
 def generate_case_id():
-  """ออกรหัส Case ID อัตโนมัติ รูปแบบ CM-YYYYMMDD-XXX"""
+  """ออกรหัส Case ID อัตโนมัติ รูปแบบ CM-SHF-YYYY-XXXX"""
   now_str = datetime.now().strftime("%Y%m%d")
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
