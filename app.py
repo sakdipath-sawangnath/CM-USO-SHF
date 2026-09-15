@@ -545,7 +545,7 @@ with tab_dash:
     # --------------------------------------
     st.subheader("📋 ตารางติดตามรายการเคสซ่อม (Recent Incident Table)")
 
-    col_search, col_export_csv, col_export_excel = st.columns()
+    col_search, col_export_csv, col_export_excel = st.columns([2,1,1])
 
     with col_search:
       search_term = st.text_input(
