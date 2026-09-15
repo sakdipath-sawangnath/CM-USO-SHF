@@ -252,20 +252,21 @@ def get_sla_info(equipment):
   return 72, "3 วัน"
 
 def generate_case_id():
-    """ออกรหัส Case ID อัตโนมัติ รูปแบบ CM-SHF-YYYY-XXXX"""
-    now_year = datetime.now().strftime("%Y")
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "SELECT COUNT(*) FROM cm_cases WHERE case_id LIKE ?",
-        (f"CM-SHF-{now_year}-%",),
-    )
-    row = c.fetchone()
-    conn.close()
-    
-    # ดึงค่าตัวเลขจาก Tuple ตำแหน่งแรก row
-    count = (row if row and row is not None else 0) + 1
-    return f"CM-SHF-{now_year}-{count:04d}"
+  """ออกรหัส Case ID อัตโนมัติ รูปแบบ CM-SHF-YYYY-XXXX"""
+  now_year = datetime.now().strftime("%Y")
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute(
+      "SELECT COUNT(*) FROM cm_cases WHERE case_id LIKE ?",
+      (f"CM-SHF-{now_year}-%",),
+  )
+  row = c.fetchone()
+  conn.close()
+
+  # เติม เพื่อดึงตัวเลขจำนวนเคสออกจาก Tuple
+  count = (row[0] if row and row[0] is not None else 0) + 1
+  return f"CM-SHF-{now_year}-{count:04d}"
+
 
 def load_data():
   """ดึงข้อมูลเคส CM ทั้งหมดจาก SQLite"""
