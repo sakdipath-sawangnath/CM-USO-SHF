@@ -1,18 +1,50 @@
 import sqlite3
 from datetime import datetime, timedelta
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 # ==========================================
-# 1. การตั้งค่าระบบและฐานข้อมูล (Database Setup)
+# 1. การตั้งค่าระบบและธีมหน้าเว็บ (Page Setup)
 # ==========================================
+st.set_page_config(
+    page_title="Executive Dashboard - Corrective Maintenance (CM)",
+    page_icon="🛠️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# Custom CSS เพื่อตกแต่ง UI ให้เป็น Modern Executive Dashboard
+st.markdown(
+    """
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stMetric {
+        background-color: #ffffff;
+        padding: 18px;
+        border-radius: 12px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+        border: 1px solid #e9ecef;
+    }
+    .status-badge-green { background-color: #d4edda; color: #155724; padding: 4px 10px; border-radius: 12px; font-weight: bold; }
+    .status-badge-yellow { background-color: #fff3cd; color: #856404; padding: 4px 10px; border-radius: 12px; font-weight: bold; }
+    .status-badge-red { background-color: #f8d7da; color: #721c24; padding: 4px 10px; border-radius: 12px; font-weight: bold; }
+    </style>
+""",
+    unsafe_allow_html=True,
+)
+
 DB_FILE = "cm_management.db"
 
 
+# ==========================================
+# 2. การจัดการฐานข้อมูล (Database Initialization)
+# ==========================================
 def init_db():
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
-  # ตารางเก็บบันทึกเคสการซ่อม (CM Cases)
+  # ตารางเก็บบันทึกเคสการซ่อม
   c.execute("""
         CREATE TABLE IF NOT EXISTS cm_cases (
             case_id TEXT PRIMARY KEY,
@@ -37,7 +69,7 @@ def init_db():
             completion_time TEXT
         )
     """)
-  # ตารางเก็บรายชื่อสถานีที่นำเข้าจาก Excel
+  # ตารางเก็บรายชื่อสถานี
   c.execute("""
         CREATE TABLE IF NOT EXISTS stations (
             station_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,9 +86,10 @@ init_db()
 
 
 # ==========================================
-# 2. ฟังก์ชันคำนวณ SLA และ Helper Functions
+# 3. ฟังก์ชันคำนวณ SLA และ Helper Functions
 # ==========================================
 def get_sla_info(equipment):
+  """คำนวณระยะเวลา SLA ตามประเภทอุปกรณ์"""
   sla_3h = [
       "ระบบศูนย์ควบคุมสถานีแม่ข่าย (BSSC)",
       "ชุดสั่งการ (Dispatcher Console)",
@@ -82,7 +115,9 @@ def get_sla_info(equipment):
     return 96, "4 วัน"
   return 72, "3 วัน"
 
+
 def generate_case_id():
+  """ออกรหัส Case ID อัตโนมัติ รูปแบบ CM-YYYYMMDD-XXX"""
   now_str = datetime.now().strftime("%Y%m%d")
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
@@ -90,12 +125,21 @@ def generate_case_id():
       "SELECT COUNT(*) FROM cm_cases WHERE case_id LIKE ?", (f"CM-{now_str}-%",)
   )
   row = c.fetchone()
-  count = (row if row else 0) + 1
+  count = (row if row and row is not None else 0) + 1
   conn.close()
   return f"CM-{now_str}-{count:03d}"
 
 
+def load_data():
+  """โหลดข้อมูลเคสทั้งหมดจากฐานข้อมูล SQLite"""
+  conn = sqlite3.connect(DB_FILE)
+  df = pd.read_sql_query("SELECT * FROM cm_cases", conn)
+  conn.close()
+  return df
+
+
 def get_station_list():
+  """ดึงรายชื่อสถานีทั้งหมด"""
   conn = sqlite3.connect(DB_FILE)
   df = pd.read_sql_query(
       "SELECT station_name, province FROM stations ORDER BY station_name", conn
@@ -104,36 +148,360 @@ def get_station_list():
   return df
 
 
-# ==========================================
-# 3. ส่วนแสดงผล UI (Streamlit Layout)
-# ==========================================
-st.set_page_config(
-    page_title="ระบบ Helpdesk & CM Tracking - USO SHF",
-    page_icon="🛠️",
-    layout="wide",
-)
+# โหลดข้อมูลหลัก
+df_raw = load_data()
 
-st.title("🛠️ ระบบบริหารจัดการและติดตามงานซ่อมแซมแก้ไข (CM Management)")
+# ==========================================
+# 4. ส่วนตัวกรองข้อมูล (Sidebar Filter Panel)
+# ==========================================
+st.sidebar.title("🔍 ตัวกรองข้อมูล (Filters)")
+st.sidebar.markdown("---")
+
+if not df_raw.empty:
+  # แปลงคอลัมน์วันที่
+  df_raw["report_time_dt"] = pd.to_datetime(df_raw["report_time"])
+  df_raw["sla_deadline_dt"] = pd.to_datetime(df_raw["sla_deadline"])
+  df_raw["completion_time_dt"] = pd.to_datetime(df_raw["completion_time"])
+
+  # Filter 1: ช่วงวันที่รับแจ้งเหตุ
+  min_date = df_raw["report_time_dt"].min().date()
+  max_date = df_raw["report_time_dt"].max().date()
+  date_range = st.sidebar.date_input(
+      "📅 ช่วงวันที่รับแจ้งเหตุ",
+      value=(min_date, max_date),
+      min_value=min_date,
+      max_value=max_date,
+  )
+
+  # Filter 2: จังหวัด
+  province_list = ["ทั้งหมด"] + sorted(
+      df_raw["province"].dropna().unique().tolist()
+  )
+  selected_province = st.sidebar.selectbox("📍 จังหวัด / พื้นที่บริการ", province_list)
+
+  # Filter 3: ประเภทอุปกรณ์
+  equip_list = ["ทั้งหมด"] + sorted(
+      df_raw["equipment_type"].dropna().unique().tolist()
+  )
+  selected_equip = st.sidebar.selectbox("🛠️ ประเภทอุปกรณ์", equip_list)
+
+  # Filter 4: สถานะงานซ่อม
+  status_list = ["ทั้งหมด"] + sorted(
+      df_raw["status"].dropna().unique().tolist()
+  )
+  selected_status = st.sidebar.selectbox("🔄 สถานะงานซ่อม", status_list)
+
+  # ประมวลผลการกรองข้อมูล
+  df_filtered = df_raw.copy()
+
+  if isinstance(date_range, tuple) and len(date_range) == 2:
+    start_d, end_d = date_range
+    df_filtered = df_filtered[
+        (df_filtered["report_time_dt"].dt.date >= start_d)
+        & (df_filtered["report_time_dt"].dt.date <= end_d)
+    ]
+
+  if selected_province != "ทั้งหมด":
+    df_filtered = df_filtered[df_filtered["province"] == selected_province]
+
+  if selected_equip != "ทั้งหมด":
+    df_filtered = df_filtered[df_filtered["equipment_type"] == selected_equip]
+
+  if selected_status != "ทั้งหมด":
+    df_filtered = df_filtered[df_filtered["status"] == selected_status]
+
+else:
+  df_filtered = pd.DataFrame()
+
+# ==========================================
+# 5. ส่วนแสดงผล UI หลัก (Header & Tabs)
+# ==========================================
+st.title("🛠️ Corrective Maintenance (CM) Executive Dashboard")
 st.caption(
-    "โครงการเพิ่มประสิทธิภาพระบบโครงข่ายสื่อสารด้วยอุปกรณ์ทวนสัญญาณผ่านคลื่นความถี่สูง"
-    " (SHF) - สำนักงาน กสทช."
+    "ระบบบริหารจัดการและติดตามงานซ่อมแซมแก้ไขอุปกรณ์โครงข่ายสถานีบริการ"
+    " (USO SHF) - สำนักงาน กสทช."
 )
 
-st.markdown("---")
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📝 1. บันทึกรับแจ้งเหตุซ่อมใหม่",
-    "📊 2. ติดตามสถานะ & อัปเดตงานซ่อม",
-    "📦 3. ติดตามอุปกรณ์สำรอง (60 วัน)",
-    "📁 4. นำเข้าข้อมูลสถานี (Excel)",
-    "📈 5. Executive Dashboard",
+tab_dash, tab_intake, tab_update, tab_spare, tab_import = st.tabs([
+    "📈 Executive Dashboard",
+    "📝 บันทึกรับแจ้งเหตุใหม่",
+    "🔄 อัปเดต & ปิดงานซ่อม",
+    "📦 ติดตามอุปกรณ์สำรอง (60 วัน)",
+    "📁 นำเข้าข้อมูลสถานี (Excel)",
 ])
 
 # ------------------------------------------
-# TAB 1: รับแจ้งเหตุซ่อมใหม่ (Helpdesk Intake)
+# TAB 1: EXECUTIVE DASHBOARD & VISUALIZATIONS
 # ------------------------------------------
-with tab1:
-  st.subheader("รับแจ้งข้อขัดข้องและออกเลข Case ID")
+with tab_dash:
+  if df_filtered.empty:
+    st.warning(
+        "⚠️ ยังไม่มีข้อมูลเคสแจ้งซ่อมในระบบ หรือไม่พบข้อมูลตามเงื่อนไขตัวกรอง"
+    )
+  else:
+    now = datetime.now()
+
+    # ฟังก์ชันประมวลผล SLA Status
+    def calc_sla_status(row):
+      if row["status"] == "แก้ไขเรียบร้อยแล้ว":
+        if (
+            pd.notna(row["completion_time_dt"])
+            and row["completion_time_dt"] <= row["sla_deadline_dt"]
+        ):
+          return "ทันเวลา (On-Time)"
+        else:
+          return "เกินกำหนด (Overdue)"
+      else:
+        if now <= row["sla_deadline_dt"]:
+          return "อยู่ใน SLA (In-SLA)"
+        else:
+          return "เกินกำหนด (Overdue)"
+
+    df_filtered["sla_status"] = df_filtered.apply(calc_sla_status, axis=1)
+
+    # --------------------------------------
+    # 2. KPI SUMMARY CARDS (6 CARDS)
+    # --------------------------------------
+    total_cases = len(df_filtered)
+    pending_cases = len(
+        df_filtered[
+            df_filtered["status"].isin(
+                ["กำลังดำเนินการ", "รออะไหล่/นำอุปกรณ์สำรองมาเปลี่ยน"]
+            )
+        ]
+    )
+    resolved_cases = len(
+        df_filtered[df_filtered["status"] == "แก้ไขเรียบร้อยแล้ว"]
+    )
+    active_spares = len(df_filtered[df_filtered["is_spare_used"] == 1])
+
+    # อัตราซ่อมทัน SLA (%)
+    completed_df = df_filtered[
+        df_filtered["status"] == "แก้ไขเรียบร้อยแล้ว"
+    ].copy()
+    on_time_count = len(
+        completed_df[completed_df["sla_status"] == "ทันเวลา (On-Time)"]
+    )
+    sla_compliance_rate = (
+        (on_time_count / len(completed_df) * 100)
+        if len(completed_df) > 0
+        else 0.0
+    )
+
+    # คำนวณ MTTR (Mean Time to Repair - ชั่วโมง)
+    if not completed_df.empty and completed_df["completion_time_dt"].notna().any():
+      repair_times_hrs = (
+          completed_df["completion_time_dt"] - completed_df["report_time_dt"]
+      ).dt.total_seconds() / 3600.0
+      mttr_val = repair_times_hrs.mean()
+      mttr_display = (
+          f"{mttr_val:.1f} ชม."
+          if mttr_val < 48
+          else f"{mttr_val/24.0:.1f} วัน"
+      )
+    else:
+      mttr_display = "N/A"
+
+    kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
+    kpi1.metric("📋 เคสทั้งหมด", f"{total_cases:,} เคส")
+    kpi2.metric(
+        "⏳ กำลังดำเนินการ",
+        f"{pending_cases:,} เคส",
+        delta=f"-{pending_cases}" if pending_cases > 0 else "0",
+        delta_color="inverse",
+    )
+    kpi3.metric("✅ ซ่อมเสร็จแล้ว", f"{resolved_cases:,} เคส")
+    kpi4.metric("🎯 SLA Compliance", f"{sla_compliance_rate:.1f}%")
+    kpi5.metric("⏱️ MTTR (เฉลี่ยซ่อม)", mttr_display)
+    kpi6.metric("📦 อุปกรณ์สำรอง", f"{active_spares:,} รายการ")
+
+    st.markdown("---")
+
+    # --------------------------------------
+    # 3. INTERACTIVE VISUALIZATIONS (PLOTLY)
+    # --------------------------------------
+    row1_col1, row1_col2 = st.columns(2)
+
+    with row1_col1:
+      # Chart 1: Status Breakdown (Donut Chart)
+      status_counts = (
+          df_filtered["status"].value_counts().reset_index()
+      )
+      status_counts.columns = ["Status", "Count"]
+      fig_status = px.pie(
+          status_counts,
+          values="Count",
+          names="Status",
+          title="📊 สัดส่วนสถานะงานซ่อม (Status Breakdown)",
+          hole=0.45,
+          color_discrete_sequence=px.colors.qualitative.Pastel,
+      )
+      fig_status.update_traces(textposition="inside", textinfo="percent+label")
+      st.plotly_chart(fig_status, use_container_width=True)
+
+    with row1_col2:
+      # Chart 2: SLA Performance (On-Time vs Overdue)
+      sla_counts = df_filtered["sla_status"].value_counts().reset_index()
+      sla_counts.columns = ["SLA_Status", "Count"]
+      color_map = {
+          "ทันเวลา (On-Time)": "#2ecc71",
+          "อยู่ใน SLA (In-SLA)": "#f1c40f",
+          "เกินกำหนด (Overdue)": "#e74c3c",
+      }
+      fig_sla = px.pie(
+          sla_counts,
+          values="Count",
+          names="SLA_Status",
+          title="🎯 ประสิทธิภาพการซ่อมตาม SLA (SLA Performance)",
+          hole=0.45,
+          color="SLA_Status",
+          color_discrete_map=color_map,
+      )
+      fig_sla.update_traces(textposition="inside", textinfo="percent+label")
+      st.plotly_chart(fig_sla, use_container_width=True)
+
+    row2_col1, row2_col2 = st.columns(2)
+
+    with row2_col1:
+      # Chart 3: Cases by Equipment Type (Horizontal Bar Chart)
+      equip_counts = (
+          df_filtered["equipment_type"].value_counts().reset_index()
+      )
+      equip_counts.columns = ["Equipment", "Count"]
+      equip_counts = equip_counts.sort_values(by="Count", ascending=True)
+      fig_equip = px.bar(
+          equip_counts,
+          x="Count",
+          y="Equipment",
+          orientation="h",
+          title="🛠️ อันดับประเภทอุปกรณ์ที่เกิดข้อขัดข้องสูงสุด",
+          text="Count",
+          color="Count",
+          color_continuous_scale="Blues",
+      )
+      fig_equip.update_layout(showlegend=False)
+      st.plotly_chart(fig_equip, use_container_width=True)
+
+    with row2_col2:
+      # Chart 4: Regional / Province Distribution (Bar Chart)
+      prov_counts = (
+          df_filtered["province"].value_counts().reset_index()
+      )
+      prov_counts.columns = ["Province", "Count"]
+      fig_prov = px.bar(
+          prov_counts,
+          x="Province",
+          y="Count",
+          title="📍 จำนวนเคสซ่อมแยกตามจังหวัด / พื้นที่บริการ",
+          text="Count",
+          color="Province",
+          color_discrete_sequence=px.colors.qualitative.Set3,
+      )
+      fig_prov.update_layout(showlegend=False)
+      st.plotly_chart(fig_prov, use_container_width=True)
+
+    st.markdown("---")
+
+    # --------------------------------------
+    # 5. RECENT INCIDENT TABLE & EXPORT
+    # --------------------------------------
+    st.subheader("📋 ตารางติดตามรายการเคสซ่อม (Recent Incident Table)")
+
+    col_search, col_export_csv, col_export_excel = st.columns()
+
+    with col_search:
+      search_term = st.text_input(
+          "🔍 ค้นหา (Case ID, ชื่อสถานี, หรือผู้รับผิดชอบ)",
+          placeholder="พิมพ์คำค้นหา...",
+      )
+
+    display_df = df_filtered.copy()
+
+    if search_term:
+      display_df = display_df[
+          display_df["case_id"]
+          .str.contains(search_term, case=False, na=False)
+          | display_df["station_name"].str.contains(
+              search_term, case=False, na=False
+          )
+          | display_df["technician_name"].str.contains(
+              search_term, case=False, na=False
+          )
+      ]
+
+    # ฟังก์ชันแสดง Badge สถานะ
+    def format_sla_badge(val):
+      if val == "ทันเวลา (On-Time)":
+        return "🟢 ทันเวลา"
+      elif val == "อยู่ใน SLA (In-SLA)":
+        return "🟡 อยู่ใน SLA"
+      else:
+        return "🔴 เกินกำหนด (Overdue)"
+
+    display_df["SLA_Status_Badge"] = display_df["sla_status"].apply(
+        format_sla_badge
+    )
+
+    # จัดการคอลัมน์สำหรับแสดงผลในตาราง
+    table_df = display_df[[
+        "case_id",
+        "station_name",
+        "province",
+        "equipment_type",
+        "report_time",
+        "sla_deadline",
+        "status",
+        "SLA_Status_Badge",
+        "technician_name",
+    ]].copy()
+
+    table_df.columns = [
+        "Case ID",
+        "ชื่อสถานี",
+        "จังหวัด",
+        "อุปกรณ์",
+        "วันที่รับแจ้ง",
+        "กำหนด SLA",
+        "สถานะงาน",
+        "สถานะ SLA",
+        "ผู้รับผิดชอบ",
+    ]
+
+    st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+    # ปุ่ม Export
+    with col_export_csv:
+      csv_data = display_df.to_csv(index=False).encode("utf-8-sig")
+      st.download_button(
+          label="📥 Export CSV",
+          data=csv_data,
+          file_name=f"CM_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+          mime="text/csv",
+          use_container_width=True,
+      )
+
+    with col_export_excel:
+      # สำหรับไฟล์ Excel
+      import io
+
+      output = io.BytesIO()
+      with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        display_df.to_excel(writer, index=False, sheet_name="CM_Cases")
+      excel_data = output.getvalue()
+
+      st.download_button(
+          label="📊 Export Excel",
+          data=excel_data,
+          file_name=f"CM_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          use_container_width=True,
+      )
+
+# ------------------------------------------
+# TAB 2: บันทึกรับแจ้งเหตุใหม่ (Helpdesk Intake)
+# ------------------------------------------
+with tab_intake:
+  st.subheader("📝 รับแจ้งข้อขัดข้องและออกเลข Case ID ใหม่")
 
   stations_df = get_station_list()
   station_options = (
@@ -234,43 +602,21 @@ with tab1:
             f" **กำหนดเสร็จภายใน:**"
             f" `{sla_deadline.strftime('%d/%m/%Y %H:%M')}`"
         )
+        st.rerun()
 
 # ------------------------------------------
-# TAB 2: ติดตามสถานะ & อัปเดตงานซ่อม
+# TAB 3: อัปเดต & ปิดงานซ่อม (Update Progress)
 # ------------------------------------------
-with tab2:
-  st.subheader("ตารางติดตามสถานะงานซ่อม และการอัปเดตผลงาน")
+with tab_update:
+  st.subheader("🔄 อัปเดตผลการซ่อมแซมหน้างาน & ปิดงานซ่อม")
 
-  conn = sqlite3.connect(DB_FILE)
-  df = pd.read_sql_query(
-      "SELECT * FROM cm_cases ORDER BY report_time DESC", conn
-  )
-  conn.close()
-
-  if df.empty:
-    st.info("ยังไม่มีข้อมูลการแจ้งซ่อมในระบบ")
+  if df_raw.empty:
+    st.info("ยังไม่มีข้อมูลเคสแจ้งซ่อมในระบบ")
   else:
-    st.dataframe(
-        df[[
-            "case_id",
-            "station_name",
-            "province",
-            "equipment_type",
-            "sla_category",
-            "report_time",
-            "sla_deadline",
-            "status",
-        ]],
-        use_container_width=True,
-    )
-
-    st.markdown("---")
-    st.subheader("🔄 อัปเดตผลการซ่อมแซมหน้างาน & ปิดงานซ่อม")
-
     selected_case = st.selectbox(
-        "เลือก Case ID ที่ต้องการอัปเดต/ปิดงาน:", df["case_id"].tolist()
+        "เลือก Case ID ที่ต้องการอัปเดต:", df_raw["case_id"].tolist()
     )
-    case_info = df[df["case_id"] == selected_case].iloc
+    case_info = df_raw[df_raw["case_id"] == selected_case].iloc
 
     st.write(
         f"**สถานี:** {case_info['station_name']} | **อุปกรณ์:**"
@@ -382,11 +728,11 @@ with tab2:
         st.rerun()
 
 # ------------------------------------------
-# TAB 3: ติดตามอุปกรณ์สำรอง 60 วัน
+# TAB 4: ติดตามอุปกรณ์สำรอง (Spare Parts)
 # ------------------------------------------
-with tab3:
+with tab_spare:
   st.subheader(
-      "รายการอุปกรณ์สำรองชั่วคราว (ต้องนำอุปกรณ์จริงส่งคืนภายใน 60 วัน)"
+      "📦 รายการอุปกรณ์สำรองชั่วคราว (กำหนดคืนอุปกรณ์จริงภายใน 60 วัน)"
   )
 
   conn = sqlite3.connect(DB_FILE)
@@ -399,19 +745,15 @@ with tab3:
   conn.close()
 
   if spare_df.empty:
-    st.info("ไม่มีรายการที่ใช้อุปกรณ์สำรองชั่วคราว")
+    st.info("ไม่มีรายการที่ใช้อุปกรณ์สำรองชั่วคราวในขณะนี้")
   else:
-    st.dataframe(spare_df, use_container_width=True)
+    st.dataframe(spare_df, use_container_width=True, hide_index=True)
 
 # ------------------------------------------
-# TAB 4: นำเข้าข้อมูลสถานีจาก Excel
+# TAB 5: นำเข้าข้อมูลสถานี (Excel Import)
 # ------------------------------------------
-with tab4:
-  st.subheader("📥 อัปโหลดไฟล์ Excel / CSV รายชื่อสถานี")
-  st.caption(
-      "อัปโหลดไฟล์เพื่อใช้เป็นตัวเลือก Dropdown"
-      " อัตโนมัติในการบันทึกแจ้งเหตุซ่อม"
-  )
+with tab_import:
+  st.subheader("📁 อัปโหลดไฟล์ Excel / CSV รายชื่อสถานี")
 
   uploaded_file = st.file_uploader(
       "เลือกไฟล์ Excel (.xlsx, .xls) หรือ CSV", type=["xlsx", "xls", "csv"]
@@ -426,9 +768,6 @@ with tab4:
 
       st.write("🔍 **ตัวอย่างข้อมูลในไฟล์:**")
       st.dataframe(excel_df.head(5), use_container_width=True)
-
-      st.markdown("---")
-      st.write("⚙️ **จับคู่คอลัมน์ข้อมูล:**")
 
       col_u1, col_u2 = st.columns(2)
       with col_u1:
@@ -470,76 +809,4 @@ with tab4:
   st.subheader("📋 รายชื่อสถานีในระบบปัจจุบัน")
   current_stations = get_station_list()
   if not current_stations.empty:
-    st.dataframe(current_stations, use_container_width=True)
-  else:
-    st.info(
-        "ยังไม่มีข้อมูลสถานีในระบบ สามารถนำเข้าผ่านไฟล์ Excel ด้านบนได้ครับ"
-    )
-
-# ------------------------------------------
-# TAB 5: Executive Dashboard & Analytics
-# ------------------------------------------
-with tab5:
-  st.subheader("📈 สรุปภาพรวมและสถิติผลการดำเนินงาน CM")
-
-  conn = sqlite3.connect(DB_FILE)
-  df_dash = pd.read_sql_query("SELECT * FROM cm_cases", conn)
-  conn.close()
-
-  if df_dash.empty:
-    st.info("ยังไม่มีข้อมูลสำหรับแสดงผลในแดชบอร์ด")
-  else:
-    # การ์ดสรุป KPI
-    total_cases = len(df_dash)
-    pending_cases = len(df_dash[df_dash["status"] == "กำลังดำเนินการ"])
-    completed_cases = len(df_dash[df_dash["status"] == "แก้ไขเรียบร้อยแล้ว"])
-    spare_cases = len(df_dash[df_dash["is_spare_used"] == 1])
-
-    # คำนวณ % การแก้ไขสำเร็จ
-    success_rate = (
-        (completed_cases / total_cases * 100) if total_cases > 0 else 0
-    )
-
-    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
-    kpi1.metric("เคสทั้งหมด", f"{total_cases} เคส")
-    kpi2.metric(
-        "กำลังดำเนินการ",
-        f"{pending_cases} เคส",
-        delta=f"-{pending_cases}" if pending_cases > 0 else "0",
-        delta_color="inverse",
-    )
-    kpi3.metric(
-        "แก้ไขเรียบร้อย", f"{completed_cases} เคส", delta=f"{success_rate:.1f}%"
-    )
-    kpi4.metric("ใช้อุปกรณ์สำรอง", f"{spare_cases} รายการ")
-    kpi5.metric("อัตราซ่อมสำเร็จ", f"{success_rate:.1f}%")
-
-    st.markdown("---")
-
-    # กราฟวิเคราะห์ข้อมูล
-    g_col1, g_col2 = st.columns(2)
-
-    with g_col1:
-      st.write("📊 **สัดส่วนสถานะงานซ่อม**")
-      status_counts = df_dash["status"].value_counts()
-      st.bar_chart(status_counts)
-
-    with g_col2:
-      st.write("📍 **จำนวนเคสแยกตามจังหวัด**")
-      province_counts = df_dash["province"].value_counts()
-      st.bar_chart(province_counts)
-
-    st.markdown("---")
-    st.write("🛠️ **จำนวนเคสแยกตามประเภทอุปกรณ์**")
-    equip_counts = df_dash["equipment_type"].value_counts()
-    st.bar_chart(equip_counts)
-
-    st.markdown("---")
-    st.subheader("📥 ดาวน์โหลดข้อมูลสรุปเพื่อจัดทำรายงานส่ง กสทช.")
-    csv_data = df_dash.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label="📥 ดาวน์โหลดรายงาน CM ทั้งหมด (.csv)",
-        data=csv_data,
-        file_name=f"CM_Report_Summary_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv",
-    )
+    st.dataframe(current_stations, use_container_width=True, hide_index=True)
