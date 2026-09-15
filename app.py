@@ -751,7 +751,7 @@ with tab_update:
     selected_case = st.selectbox(
         "เลือก Case ID ที่ต้องการอัปเดต:", df_raw["case_id"].tolist()
     )
-    case_info = df_raw[df_raw["case_id"] == selected_case].iloc
+    case_info = df_raw[df_raw["case_id"] == selected_case].iloc[0]
 
     st.write(
         f"**สถานี:** {case_info['station_name']} | **อุปกรณ์:**"
