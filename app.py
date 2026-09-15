@@ -1,34 +1,45 @@
+import io
 import sqlite3
 from datetime import datetime, timedelta
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
 # ==========================================
-# 1. การตั้งค่าระบบและธีมหน้าเว็บ (Page Setup)
+# 1. การตั้งค่าระบบและธีมหน้าเว็บ (Page Configuration)
 # ==========================================
 st.set_page_config(
-    page_title="Executive Dashboard - Corrective Maintenance (CM)",
+    page_title="CM Executive Dashboard - ระบบบริหารงานซ่อมบำรุง",
     page_icon="🛠️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS เพื่อตกแต่ง UI ให้เป็น Modern Executive Dashboard
+# Custom CSS ตกแต่งสไตล์ Clean, Modern, Professional UI
 st.markdown(
     """
     <style>
+    /* ปรับแต่งพื้นหลังและฟอนต์ */
     .main { background-color: #f8f9fa; }
-    .stMetric {
+    
+    /* ตกแต่งการ์ด KPI */
+    [data-testid="stMetric"] {
         background-color: #ffffff;
-        padding: 18px;
+        padding: 20px;
         border-radius: 12px;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
         border: 1px solid #e9ecef;
+        transition: transform 0.2s ease;
     }
-    .status-badge-green { background-color: #d4edda; color: #155724; padding: 4px 10px; border-radius: 12px; font-weight: bold; }
-    .status-badge-yellow { background-color: #fff3cd; color: #856404; padding: 4px 10px; border-radius: 12px; font-weight: bold; }
-    .status-badge-red { background-color: #f8d7da; color: #721c24; padding: 4px 10px; border-radius: 12px; font-weight: bold; }
+    [data-testid="stMetric"]:hover {
+        transform: translateY(-2px);
+    }
+    
+    /* สไตล์สำหรับ Badge แสดงสถานะ */
+    .badge-green { color: #2ecc71; font-weight: bold; }
+    .badge-yellow { color: #f1c40f; font-weight: bold; }
+    .badge-red { color: #e74c3c; font-weight: bold; }
     </style>
 """,
     unsafe_allow_html=True,
@@ -38,12 +49,14 @@ DB_FILE = "cm_management.db"
 
 
 # ==========================================
-# 2. การจัดการฐานข้อมูล (Database Initialization)
+# 2. การจัดการฐานข้อมูล (Database Management)
 # ==========================================
 def init_db():
+  """สร้างตารางและจำลองข้อมูลเริ่มต้นหากฐานข้อมูลยังว่างเปล่า"""
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
-  # ตารางเก็บบันทึกเคสการซ่อม
+
+  # ตารางบันทึกเคส CM
   c.execute("""
         CREATE TABLE IF NOT EXISTS cm_cases (
             case_id TEXT PRIMARY KEY,
@@ -68,7 +81,8 @@ def init_db():
             completion_time TEXT
         )
     """)
-  # ตารางเก็บรายชื่อสถานี
+
+  # ตารางเก็บรายชื่อสถานีที่นำเข้าจาก Excel
   c.execute("""
         CREATE TABLE IF NOT EXISTS stations (
             station_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +91,129 @@ def init_db():
             district TEXT
         )
     """)
+
+  # จำลองข้อมูลตั้งต้นหากยังไม่มีข้อมูล
+  c.execute("SELECT COUNT(*) FROM cm_cases")
+  if c.fetchone() == 0:
+    sample_data = [
+        (
+            "CM-20260901-001",
+            "สถานีบ้านห้วยผา",
+            "แม่ฮ่องสอน",
+            "สมชาย ใจดี",
+            "0812345678",
+            "สัญญาณ SHF ขาดหาย",
+            "ชุดอุปกรณ์ทวนสัญญาณผ่านคลื่นความถี่สูง (SHF)",
+            "3 วัน",
+            "2026-09-01 09:00:00",
+            "2026-09-04 09:00:00",
+            "แก้ไขเรียบร้อยแล้ว",
+            "วิศวกร กข",
+            "เปลี่ยนโมดูล RF",
+            "SN1001",
+            "SN2001",
+            0,
+            "",
+            "",
+            "",
+            "2026-09-02 14:30:00",
+        ),
+        (
+            "CM-20260905-002",
+            "สถานีขุนยวม",
+            "แม่ฮ่องสอน",
+            "สมศรี มีสุข",
+            "0898765432",
+            "BSSC ล่ม ไม่สามารถเชื่อมต่อได้",
+            "ระบบศูนย์ควบคุมสถานีแม่ข่าย (BSSC)",
+            "3 ชั่วโมง (ด่วนที่สุด)",
+            "2026-09-05 10:00:00",
+            "2026-09-05 13:00:00",
+            "แก้ไขเรียบร้อยแล้ว",
+            "วิศวกร คง",
+            "Restart Service & Config Route",
+            "SN1002",
+            "SN1002",
+            0,
+            "",
+            "",
+            "",
+            "2026-09-05 11:45:00",
+        ),
+        (
+            "CM-20260910-003",
+            "สถานีอุ้มผาง",
+            "ตาก",
+            "วิชัย ชาญชัย",
+            "0861112223",
+            "L3 Switch พอร์ตเสีย 4 พอร์ต",
+            "อุปกรณ์กระจายสัญญาณ L3 Switch (24 Ports)",
+            "3 วัน",
+            "2026-09-10 08:30:00",
+            "2026-09-13 08:30:00",
+            "รออะไหล่/นำอุปกรณ์สำรองมาเปลี่ยน",
+            "วิศวกร จฉ",
+            "ติดตั้ง Switch สำรองชั่วคราว",
+            "SN3001",
+            "",
+            1,
+            "SP-9901",
+            "2026-09-10",
+            "2026-11-09",
+            None,
+        ),
+        (
+            "CM-20260912-004",
+            "สถานีสังขละบุรี",
+            "กาญจนบุรี",
+            "ประเสริฐ ยอดเยี่ยม",
+            "0845556667",
+            "วิทยุมือถือชาร์จไฟไม่เข้า",
+            "เครื่องวิทยุลูกข่ายชนิดมือถือ",
+            "4 วัน",
+            "2026-09-12 11:00:00",
+            "2026-09-16 11:00:00",
+            "กำลังดำเนินการ",
+            "วิศวกร ชซ",
+            "อยู่ระหว่างนำส่งศูนย์ซ่อม",
+            "SN4001",
+            "",
+            0,
+            "",
+            "",
+            "",
+            None,
+        ),
+        (
+            "CM-20260908-005",
+            "สถานีแม่ริม",
+            "เชียงใหม่",
+            "นภา สดใส",
+            "0834445556",
+            "UPS สันนิษฐานว่าแบตเตอรี่เสื่อม",
+            "เครื่องสำรองไฟฟ้า ขนาด 3 kVA",
+            "3 วัน",
+            "2026-09-08 15:00:00",
+            "2026-09-11 15:00:00",
+            "แก้ไขเรียบร้อยแล้ว",
+            "วิศวกร กข",
+            "เปลี่ยนชุดแบตเตอรี่ใหม่",
+            "SN5001",
+            "SN5002",
+            0,
+            "",
+            "",
+            "",
+            "2026-09-13 10:00:00",
+        ),
+    ]
+    c.executemany(
+        """
+            INSERT INTO cm_cases VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        sample_data,
+    )
+
   conn.commit()
   conn.close()
 
@@ -85,10 +222,10 @@ init_db()
 
 
 # ==========================================
-# 3. ฟังก์ชันคำนวณ SLA และ Helper Functions
+# 3. ฟังก์ชันคำนวณและ Helper Functions
 # ==========================================
 def get_sla_info(equipment):
-  """คำนวณระยะเวลา SLA ตามประเภทอุปกรณ์"""
+  """คำนวณระยะเวลา SLA ตามเงื่อนไขความสำคัญของอุปกรณ์"""
   sla_3h = [
       "ระบบศูนย์ควบคุมสถานีแม่ข่าย (BSSC)",
       "ชุดสั่งการ (Dispatcher Console)",
@@ -130,7 +267,7 @@ def generate_case_id():
 
 
 def load_data():
-  """โหลดข้อมูลเคสทั้งหมดจากฐานข้อมูล SQLite"""
+  """ดึงข้อมูลเคส CM ทั้งหมดจาก SQLite"""
   conn = sqlite3.connect(DB_FILE)
   df = pd.read_sql_query("SELECT * FROM cm_cases", conn)
   conn.close()
@@ -138,7 +275,7 @@ def load_data():
 
 
 def get_station_list():
-  """ดึงรายชื่อสถานีทั้งหมด"""
+  """ดึงรายชื่อสถานีที่บันทึกไว้"""
   conn = sqlite3.connect(DB_FILE)
   df = pd.read_sql_query(
       "SELECT station_name, province FROM stations ORDER BY station_name", conn
@@ -151,18 +288,18 @@ def get_station_list():
 df_raw = load_data()
 
 # ==========================================
-# 4. ส่วนตัวกรองข้อมูล (Sidebar Filter Panel)
+# 4. ตัวกรองข้อมูล (Sidebar Filter Panel)
 # ==========================================
 st.sidebar.title("🔍 ตัวกรองข้อมูล (Filters)")
 st.sidebar.markdown("---")
 
 if not df_raw.empty:
-  # แปลงคอลัมน์วันที่
+  # แปลงฟอร์แมตวันที่
   df_raw["report_time_dt"] = pd.to_datetime(df_raw["report_time"])
   df_raw["sla_deadline_dt"] = pd.to_datetime(df_raw["sla_deadline"])
   df_raw["completion_time_dt"] = pd.to_datetime(df_raw["completion_time"])
 
-  # Filter 1: ช่วงวันที่รับแจ้งเหตุ
+  # 1. ตัวกรองช่วงวันที่
   min_date = df_raw["report_time_dt"].min().date()
   max_date = df_raw["report_time_dt"].max().date()
   date_range = st.sidebar.date_input(
@@ -172,25 +309,25 @@ if not df_raw.empty:
       max_value=max_date,
   )
 
-  # Filter 2: จังหวัด
+  # 2. ตัวกรองจังหวัด
   province_list = ["ทั้งหมด"] + sorted(
       df_raw["province"].dropna().unique().tolist()
   )
   selected_province = st.sidebar.selectbox("📍 จังหวัด / พื้นที่บริการ", province_list)
 
-  # Filter 3: ประเภทอุปกรณ์
+  # 3. ตัวกรองประเภทอุปกรณ์
   equip_list = ["ทั้งหมด"] + sorted(
       df_raw["equipment_type"].dropna().unique().tolist()
   )
   selected_equip = st.sidebar.selectbox("🛠️ ประเภทอุปกรณ์", equip_list)
 
-  # Filter 4: สถานะงานซ่อม
+  # 4. ตัวกรองสถานะงาน
   status_list = ["ทั้งหมด"] + sorted(
       df_raw["status"].dropna().unique().tolist()
   )
   selected_status = st.sidebar.selectbox("🔄 สถานะงานซ่อม", status_list)
 
-  # ประมวลผลการกรองข้อมูล
+  # คำนวณการกรอง
   df_filtered = df_raw.copy()
 
   if isinstance(date_range, tuple) and len(date_range) == 2:
@@ -213,9 +350,9 @@ else:
   df_filtered = pd.DataFrame()
 
 # ==========================================
-# 5. ส่วนแสดงผล UI หลัก (Header & Tabs)
+# 5. ส่วนแสดงผลหลัก (Main Interface)
 # ==========================================
-st.title("🛠️ Corrective Maintenance (CM) Executive Dashboard")
+st.title("🛠️ Executive Dashboard - Corrective Maintenance (CM)")
 st.caption(
     "ระบบบริหารจัดการและติดตามงานซ่อมแซมแก้ไขอุปกรณ์โครงข่ายสถานีบริการ"
     " (USO SHF) - สำนักงาน กสทช."
@@ -240,7 +377,7 @@ with tab_dash:
   else:
     now = datetime.now()
 
-    # ฟังก์ชันประมวลผล SLA Status
+    # ประมวลผล SLA Status แต่ละเคส
     def calc_sla_status(row):
       if row["status"] == "แก้ไขเรียบร้อยแล้ว":
         if (
@@ -274,7 +411,7 @@ with tab_dash:
     )
     active_spares = len(df_filtered[df_filtered["is_spare_used"] == 1])
 
-    # อัตราซ่อมทัน SLA (%)
+    # อัตราการแก้ปัญหาเสร็จทัน SLA (%)
     completed_df = df_filtered[
         df_filtered["status"] == "แก้ไขเรียบร้อยแล้ว"
     ].copy()
@@ -287,7 +424,7 @@ with tab_dash:
         else 0.0
     )
 
-    # คำนวณ MTTR (Mean Time to Repair - ชั่วโมง)
+    # คำนวณ MTTR (Mean Time to Repair)
     if not completed_df.empty and completed_df["completion_time_dt"].notna().any():
       repair_times_hrs = (
           completed_df["completion_time_dt"] - completed_df["report_time_dt"]
@@ -319,9 +456,9 @@ with tab_dash:
     # --------------------------------------
     # 3. INTERACTIVE VISUALIZATIONS (PLOTLY)
     # --------------------------------------
-    row1_col1, row1_col2 = st.columns(2)
+    r1_c1, r1_c2 = st.columns(2)
 
-    with row1_col1:
+    with r1_c1:
       # Chart 1: Status Breakdown (Donut Chart)
       status_counts = (
           df_filtered["status"].value_counts().reset_index()
@@ -338,8 +475,8 @@ with tab_dash:
       fig_status.update_traces(textposition="inside", textinfo="percent+label")
       st.plotly_chart(fig_status, use_container_width=True)
 
-    with row1_col2:
-      # Chart 2: SLA Performance (On-Time vs Overdue)
+    with r1_c2:
+      # Chart 2: SLA Performance (Donut Chart)
       sla_counts = df_filtered["sla_status"].value_counts().reset_index()
       sla_counts.columns = ["SLA_Status", "Count"]
       color_map = {
@@ -359,10 +496,10 @@ with tab_dash:
       fig_sla.update_traces(textposition="inside", textinfo="percent+label")
       st.plotly_chart(fig_sla, use_container_width=True)
 
-    row2_col1, row2_col2 = st.columns(2)
+    r2_c1, r2_c2 = st.columns(2)
 
-    with row2_col1:
-      # Chart 3: Cases by Equipment Type (Horizontal Bar Chart)
+    with r2_c1:
+      # Chart 3: Cases by Equipment Type (Horizontal Bar)
       equip_counts = (
           df_filtered["equipment_type"].value_counts().reset_index()
       )
@@ -381,7 +518,7 @@ with tab_dash:
       fig_equip.update_layout(showlegend=False)
       st.plotly_chart(fig_equip, use_container_width=True)
 
-    with row2_col2:
+    with r2_c2:
       # Chart 4: Regional / Province Distribution (Bar Chart)
       prov_counts = (
           df_filtered["province"].value_counts().reset_index()
@@ -441,7 +578,6 @@ with tab_dash:
         format_sla_badge
     )
 
-    # จัดการคอลัมน์สำหรับแสดงผลในตาราง
     table_df = display_df[[
         "case_id",
         "station_name",
@@ -468,7 +604,7 @@ with tab_dash:
 
     st.dataframe(table_df, use_container_width=True, hide_index=True)
 
-    # ปุ่ม Export
+    # ปุ่ม Export CSV
     with col_export_csv:
       csv_data = display_df.to_csv(index=False).encode("utf-8-sig")
       st.download_button(
@@ -479,10 +615,8 @@ with tab_dash:
           use_container_width=True,
       )
 
+    # ปุ่ม Export Excel
     with col_export_excel:
-      # สำหรับไฟล์ Excel
-      import io
-
       output = io.BytesIO()
       with pd.ExcelWriter(output, engine="openpyxl") as writer:
         display_df.to_excel(writer, index=False, sheet_name="CM_Cases")
